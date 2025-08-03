@@ -38,7 +38,7 @@ $(test_host_bin): $(test_host_src)
 
 # Run the test
 test: $(test_device_bin) $(dll)
-	opt -load-pass-plugin $(dll) \
+	opt-19 -load-pass-plugin $(dll) \
 		-passes=llvm2wgsl \
 		-disable-output \
 		$(test_device_bin)
