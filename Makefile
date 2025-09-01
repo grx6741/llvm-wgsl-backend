@@ -18,9 +18,10 @@ test_host_bin = $(test_dir)/$(test_name)/$(test_name)_host.ll
 $(test_device_bin): $(test_device_src)
 	clang++ --cuda-gpu-arch=sm_70 \
 		--cuda-device-only \
-		-Os \
+		-O3 \
 		-nocudalib \
 		-S -emit-llvm \
+		-fno-discard-value-names \
 		$(test_device_src) \
 		-o $(test_device_bin) \
 		-Wno-unknown-cuda-version
@@ -29,11 +30,12 @@ $(test_device_bin): $(test_device_src)
 $(test_host_bin): $(test_host_src)
 	clang++ --cuda-gpu-arch=sm_70 \
 		--cuda-host-only \
-		-Os \
+		-O3 \
 		-S -emit-llvm \
 		$(test_host_src) \
 		-o $(test_host_bin) \
 		-I/usr/local/cuda/include \
+		-fno-discard-value-names \
 		-Wno-unknown-cuda-version
 
 # Run the test

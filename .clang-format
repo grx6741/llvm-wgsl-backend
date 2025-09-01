@@ -1,7 +1,5 @@
----
 Language: Cpp
 BasedOnStyle: LLVM
-
 # Indentation
 IndentWidth: 4
 TabWidth: 4
@@ -9,7 +7,6 @@ UseTab: Never
 ContinuationIndentWidth: 4
 IndentCaseLabels: true
 IndentPPDirectives: None
-
 # Braces
 BreakBeforeBraces: Custom
 BraceWrapping:
@@ -26,7 +23,6 @@ BraceWrapping:
   SplitEmptyFunction: false
   SplitEmptyRecord: false
   SplitEmptyNamespace: false
-
 # Spacing
 SpaceBeforeParens: Custom
 SpaceBeforeParensOptions:
@@ -37,7 +33,6 @@ SpaceBeforeParensOptions:
   AfterIfMacros: true
   AfterOverloadedOperator: false
   BeforeNonEmptyParentheses: false
-
 SpaceAfterCStyleCast: true
 SpaceBeforeAssignmentOperators: true
 SpaceBeforeRangeBasedForLoopColon: true
@@ -48,7 +43,6 @@ SpacesInCStyleCastParentheses: true
 SpacesInContainerLiterals: false
 SpacesInParentheses: true
 SpacesInSquareBrackets: false
-
 # Line breaks
 ColumnLimit: 100
 MaxEmptyLinesToKeep: 2
@@ -58,18 +52,19 @@ AllowShortCaseLabelsOnASingleLine: false
 AllowShortFunctionsOnASingleLine: None
 AllowShortIfStatementsOnASingleLine: Never
 AllowShortLoopsOnASingleLine: false
-
-# Alignment
+# Alignment - Key changes for function parameter formatting
 AlignAfterOpenBracket: Align
 AlignConsecutiveAssignments: false
 AlignConsecutiveDeclarations: false
 AlignEscapedNewlines: Right
 AlignOperands: true
 AlignTrailingComments: true
-
-# Other formatting
+# Parameter formatting - Critical settings
 BinPackArguments: false
 BinPackParameters: false
+AllowAllParametersOfDeclarationOnNextLine: true
+AllowAllArgumentsOnNextLine: true
+# Other formatting
 BreakBeforeBinaryOperators: None
 BreakBeforeTernaryOperators: true
 BreakConstructorInitializers: BeforeColon
@@ -86,7 +81,6 @@ PointerAlignment: Left
 ReflowComments: true
 SortIncludes: false
 SortUsingDeclarations: true
-
 # Access modifiers
 AccessModifierOffset: -4
 IndentAccessModifiers: false

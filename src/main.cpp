@@ -14,10 +14,10 @@ struct LLVM2WGSL : llvm::PassInfoMixin< LLVM2WGSL >
     {
         WGSL::Backend backend;
 
+        // Go through all Functions that have a body
         for ( llvm::Function& F : M ) {
-            if ( F.isDeclaration() )
-                continue;
-            backend.RegisterFunction( F );
+            if ( !F.isDeclaration() )
+                backend.RegisterFunction( F );
         }
 
         return llvm::PreservedAnalyses::all();
