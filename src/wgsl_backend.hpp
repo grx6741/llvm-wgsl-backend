@@ -3,6 +3,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/Demangle/Demangle.h"
 #include "llvm/ADT/SmallSet.h"
+#include <memory>
 
 #include "src/tint/lang/core/ir/module.h"
 #include "src/tint/lang/core/ir/builder.h"
@@ -33,7 +34,7 @@ private:
     tint::core::type::Manager& m_TypeManager;
     llvm::ItaniumPartialDemangler m_Demangler;
 
-    std::vector< Translator > m_Translators;
+    std::vector< std::unique_ptr< Translator > > m_Translators;
 };
 
 } // namespace WGSL

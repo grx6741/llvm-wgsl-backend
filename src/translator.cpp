@@ -9,6 +9,12 @@
 namespace WGSL
 {
 
+const std::unordered_map< std::string, int > WGSLintrinsicMap = {
+    { "llvm.nvvm.read.ptx.sreg.ctaid.x", 1 },
+    { "llvm.nvvm.read.ptx.sreg.ctaid.y", 1 },
+    { "llvm.nvvm.read.ptx.sreg.ctaid.z", 1 } };
+
+
 Translator::Translator( tint::core::ir::Module& M,
                         tint::core::ir::Builder& B,
                         tint::SymbolTable& ST,
@@ -26,58 +32,52 @@ Translator::Translator( tint::core::ir::Module& M,
         LOG_ERROR << "Passed LLVM Function is NULL\n";
         return;
     }
-    const auto demangled_name = getDemangledName( m_LLVMfunc->getName().str() );
+    m_DemangledName = getDemangledName( m_LLVMfunc->getName().str() );
+    LOG_INFO << "LLVM function name: '" << m_LLVMfunc->getName().str() << "'" << LOG_END;
+    LOG_INFO << "Demangled name: '" << m_DemangledName << "'" << LOG_END;
 
-    // m_WGSLfunc = m_Builder.Function(
-    //     demangled_name, MapLLVMtype2WGSLtype( m_Module, m_LLVMfunc->getReturnType() ) );
+    m_WGSLfunc = m_Builder.Function(
+        m_DemangledName, MapLLVMtype2WGSLtype( m_Module, m_LLVMfunc->getReturnType() ) );
 
-    m_WGSLfunc =
-        m_IsEntry
-            ? m_Builder.ComputeFunction(
-                  demangled_name, tint::core::i32( 1 ), tint::core::i32( 1 ), tint::core::i32( 1 ) )
-            : m_Builder.Function( demangled_name,
-                                  MapLLVMtype2WGSLtype( m_Module, m_LLVMfunc->getReturnType() ) );
+    LOG_INFO << "WGSL function name after creation: '" << m_Module.NameOf( m_WGSLfunc ).to_str()
+             << "'" << LOG_END;
 
-    LOG_INFO << ( m_IsEntry ? "Entry" : "Normal" ) << " Function :: " << demangled_name
+    // m_WGSLfunc =
+    //     m_IsEntry
+    //         ? m_Builder.ComputeFunction(
+    //               demangled_name, tint::core::i32( 1 ), tint::core::i32( 1 ), tint::core::i32( 1
+    //               ) )
+    //         : m_Builder.Function( demangled_name,
+    //                               MapLLVMtype2WGSLtype( m_Module, m_LLVMfunc->getReturnType() )
+    //                               );
+
+    LOG_INFO << ( m_IsEntry ? "Entry" : "Normal" ) << " Function :: " << m_DemangledName
              << ( m_IsEntry ? ""
                             : " -> " + MapLLVMtype2WGSLtype( m_Module, m_LLVMfunc->getReturnType() )
                                            ->FriendlyName() )
              << LOG_END;
 }
 
-void Translator::AddFunctionBuiltinParam( const llvm::Value* llvm_param,
-                                          const tint::core::BuiltinValue param )
-{
-    // if ( !m_WGSLfunc->IsCompute() )
-    //     return;
-
-    const tint::core::type::Type* type;
-    switch ( param ) {
-        case tint::core::BuiltinValue::kLocalInvocationId:
-        case tint::core::BuiltinValue::kWorkgroupId:
-        case tint::core::BuiltinValue::kNumWorkgroups:
-            type = m_Module.Types().vec3( m_Module.Types().u32() );
-            break;
-        default:
-            type = m_Module.Types().invalid();
-            break;
-    }
-
-    const auto& name = tint::core::ToString( param );
-
-    if ( !type->Is< tint::core::type::Invalid >() ) {
-        AddFunctionParam( name, llvm_param, type, param );
-    }
-}
-
 void Translator::AddFunctionParam( const std::string_view& name,
-                                   const llvm::Value* llvm_param,
+                                   const llvm::Argument* llvm_param,
                                    const tint::core::type::Type* type,
                                    tint::core::BuiltinValue builtin_type )
 {
     if ( m_IsEntry ) {
         if ( type->Is< tint::core::type::Array >() ) {
             LOG_INFO << "    Param< " << type->FriendlyName() << " > " << name << LOG_END;
+
+            auto* storage_ptr = m_Module.Types().ptr( tint::core::AddressSpace::kStorage,
+                                                      type,
+                                                      isArgReadOnly( llvm_param )
+                                                          ? tint::core::Access::kRead
+                                                          : tint::core::Access::kReadWrite );
+
+            auto* storage_var = m_Builder.Var( name, storage_ptr );
+            storage_var->SetBindingPoint( m_GroupCounter, m_BindingCounter++ );
+            m_Module.root_block->Append( storage_var );
+
+            m_ValueMap[llvm_param] = storage_var->Result();
         }
         else {
             LOG_INFO << "    Param< " << type->FriendlyName() << " > " << name << LOG_END;
@@ -97,7 +97,7 @@ void Translator::AddFunctionParam( const std::string_view& name,
     }
 }
 
-void Translator::Translate()
+void Translator::Translate( tint::core::ir::Var* globals )
 {
     m_IsEntry ? translateKernelFunction() : translateNormalFunction();
 }
@@ -177,20 +177,21 @@ tint::core::ir::Value* Translator::getOperand( const llvm::Instruction& I, int o
 void Translator::translateKernelFunction()
 {
     if ( m_StructParamMembers.Length() > 0 ) {
-        auto* struct_param_t = m_Module.Types().Struct(
-            m_SymbolTable.New( m_Module.NameOf( m_WGSLfunc ).to_str() + "_struct_param_t" ),
-            m_StructParamMembers );
+        auto struct_name = m_SymbolTable.New( m_DemangledName + "_params_t" );
+        auto* struct_type = m_Module.Types().Struct( struct_name, m_StructParamMembers );
 
-        auto* uniform_struct_param = m_Builder.Var(
-            std::string( "uniform_" ) + m_Module.NameOf( m_WGSLfunc ).to_str() + "params",
-            m_Module.Types().ptr( tint::core::AddressSpace::kUniform, struct_param_t ) );
+        auto* uniform_ptr_type = m_Module.Types().ptr(
+            tint::core::AddressSpace::kUniform, struct_type, tint::core::Access::kRead );
 
-        uniform_struct_param->SetBindingPoint( m_GroupCounter, m_BindingCounter++ );
+        auto var_name = m_DemangledName + "_params";
+        auto* uniform_var = m_Builder.Var( var_name, uniform_ptr_type );
 
-        m_Module.root_block->Append( uniform_struct_param );
+        uniform_var->SetBindingPoint( m_GroupCounter, m_BindingCounter++ );
+
+        m_Module.root_block->Append( uniform_var );
     }
 
-    // translateFunctionBody();
+    translateFunctionBody();
 }
 
 void Translator::translateNormalFunction()
@@ -199,6 +200,75 @@ void Translator::translateNormalFunction()
         m_WGSLfunc->SetParams( m_FunctionParams );
 
     translateFunctionBody();
+}
+
+
+bool Translator::isArgReadOnly( const llvm::Argument* arg )
+{
+    if ( !arg->getType()->isPointerTy() ) {
+        return false; // Not a pointer, irrelevant
+    }
+
+    const llvm::Function* parent = arg->getParent();
+    unsigned arg_index = arg->getArgNo();
+
+    // Check explicit ReadOnly attribute
+    if ( parent->hasParamAttribute( arg_index, llvm::Attribute::ReadOnly ) ) {
+        LOG_INFO << "Arg " << arg->getName() << " is ReadOnly (by attribute)" << LOG_END;
+        return true;
+    }
+
+    // Check if NoAlias + ReadOnly is set (common for const pointers)
+    if ( parent->hasParamAttribute( arg_index, llvm::Attribute::NoAlias ) &&
+         !isPointerWritten( arg ) ) {
+        LOG_INFO << "Arg " << arg->getName() << " is ReadOnly (no writes found)" << LOG_END;
+        return true;
+    }
+
+    LOG_INFO << "Arg " << arg->getName() << " is NOT ReadOnly" << LOG_END;
+    return false;
+}
+
+bool Translator::isPointerWritten( const llvm::Argument* arg )
+{
+    // Scan all uses of this argument
+    for ( const llvm::User* user : arg->users() ) {
+        if ( const auto* store = llvm::dyn_cast< llvm::StoreInst >( user ) ) {
+            // Check if arg is the pointer operand (being written to)
+            if ( store->getPointerOperand() == arg ) {
+                return true;
+            }
+        }
+
+        // Check GEP instructions that derive from this pointer
+        if ( const auto* gep = llvm::dyn_cast< llvm::GetElementPtrInst >( user ) ) {
+            // Recursively check if the GEP result is written to
+            for ( const llvm::User* gep_user : gep->users() ) {
+                if ( const auto* store = llvm::dyn_cast< llvm::StoreInst >( gep_user ) ) {
+                    if ( store->getPointerOperand() == gep ) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Check for call instructions that might write through the pointer
+        if ( const auto* call = llvm::dyn_cast< llvm::CallInst >( user ) ) {
+            // If passed to another function without ReadOnly, assume it might be written
+            const llvm::Function* callee = call->getCalledFunction();
+            if ( callee ) {
+                for ( unsigned i = 0; i < call->arg_size(); ++i ) {
+                    if ( call->getArgOperand( i ) == arg ) {
+                        if ( !callee->hasParamAttribute( i, llvm::Attribute::ReadOnly ) ) {
+                            return true; // Might be written in callee
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return false;
 }
 
 void Translator::translateFunctionBody()
@@ -214,8 +284,6 @@ void Translator::translateFunctionBody()
                     VISIT_INST( FAdd );
                     VISIT_INST( FMul );
                     VISIT_INST( Ret );
-                    VISIT_INST( Alloca );
-                    VISIT_INST( Store );
                     VISIT_INST( Call );
                     default:
                         LOG_WARN << I.getOpcodeName() << " instruction NOT IMPLEMENTED \n";
@@ -232,7 +300,11 @@ void Translator::translateFunctionBody()
 void Translator::visitFAdd( const llvm::Instruction& I )
 {
     auto* lhs = getOperand( I, 0 );
+    if ( !lhs )
+        return;
     auto* rhs = getOperand( I, 1 );
+    if ( !rhs )
+        return;
 
     const auto* type = MapLLVMtype2WGSLtype( m_Module, I.getType() );
 
@@ -242,7 +314,11 @@ void Translator::visitFAdd( const llvm::Instruction& I )
 void Translator::visitFMul( const llvm::Instruction& I )
 {
     auto* lhs = getOperand( I, 0 );
+    if ( !lhs )
+        return;
     auto* rhs = getOperand( I, 1 );
+    if ( !rhs )
+        return;
 
     const auto* type = MapLLVMtype2WGSLtype( m_Module, I.getType() );
 
@@ -276,27 +352,6 @@ void Translator::visitRet( const llvm::Instruction& I )
     LOG_INFO << "    Returning with arg" << ret_val << LOG_END;
     m_Builder.Return( m_WGSLfunc, getOperand( I, 0 ) );
 }
-
-void Translator::visitAlloca( const llvm::Instruction& I )
-{
-    const auto* inst = llvm::dyn_cast< llvm::AllocaInst >( &I );
-    const auto* alloca_type = inst->getAllocatedType();
-
-    const auto& var_name = I.getName().str();
-
-    auto* wgsl_type = MapLLVMtype2WGSLtype( m_Module, alloca_type );
-
-    auto* wgsl_var = m_Builder.Var(
-        var_name, m_Module.Types().ptr( tint::core::AddressSpace::kFunction, wgsl_type ) );
-
-    m_ValueMap[&I] = wgsl_var->Result();
-    LOG_INFO << "    Alloca: " << var_name << " : " << wgsl_type->FriendlyName() << LOG_END;
-}
-
-
-void Translator::visitStore( const llvm::Instruction& I )
-{}
-
 
 void Translator::visitCall( const llvm::Instruction& I )
 {

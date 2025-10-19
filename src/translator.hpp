@@ -1,10 +1,14 @@
 #pragma once
 
 #include "llvm/IR/Function.h"
+#include "llvm/IR/Argument.h"
 #include "llvm/Demangle/Demangle.h"
 #include <llvm/ADT/SmallSet.h>
 
 #include "src/tint/lang/core/ir/builder.h"
+#include "src/tint/lang/core/ir/var.h"
+
+#include <unordered_map>
 
 namespace WGSL
 {
@@ -26,24 +30,28 @@ public:
 
     void AddFunctionParam(
         const std::string_view& name,
-        const llvm::Value* llvm_param,
+        const llvm::Argument* llvm_param,
         const tint::core::type::Type* type,
         tint::core::BuiltinValue builtin_type = tint::core::BuiltinValue::kUndefined );
 
-    void AddFunctionBuiltinParam( const llvm::Value* llvm_param,
-                                  const tint::core::BuiltinValue param );
-
-    void Translate();
+    void Translate( tint::core::ir::Var* globals );
 
     inline const bool IsEntry()
     {
         return m_IsEntry;
     }
 
+    tint::core::ir::Function* GetWGSLFunc() const
+    {
+        return m_WGSLfunc;
+    }
+
 private:
     const std::string getDemangledName( const std::string& mangled_name );
 
     tint::core::ir::Value* getOperand( const llvm::Instruction& I, int op_idx );
+    bool isArgReadOnly( const llvm::Argument* arg );
+    bool isPointerWritten( const llvm::Argument* arg );
 
     void translateKernelFunction();
     void translateNormalFunction();
@@ -53,8 +61,6 @@ private:
     void visitFAdd( const llvm::Instruction& I );
     void visitFMul( const llvm::Instruction& I );
     void visitRet( const llvm::Instruction& I );
-    void visitAlloca( const llvm::Instruction& I );
-    void visitStore( const llvm::Instruction& I );
     void visitCall( const llvm::Instruction& I );
 
 private:
@@ -75,7 +81,9 @@ private:
     tint::core::ir::Module& m_Module;
     tint::core::ir::Builder& m_Builder;
     tint::SymbolTable& m_SymbolTable;
+
     llvm::ItaniumPartialDemangler m_Demangler;
+    std::string m_DemangledName;
 };
 
 } // namespace WGSL

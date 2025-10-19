@@ -1,3 +1,4 @@
+#include "src/tint/lang/core/number.h"
 #include "util.hpp"
 #include "wgsl_backend.hpp"
 
@@ -25,8 +26,45 @@ Backend::Backend()
 
 Backend::~Backend()
 {
-    // m_Builder.ComputeFunction(
-    //     "wgsl_main", tint::core::i32( 1 ), tint::core::i32( 1 ), tint::core::i32( 1 ) );
+    tint::Vector< tint::core::type::Manager::StructMemberDesc, 4 > members;
+    members.Push(
+        { m_SymbolTable.New( "global_id_" ), m_Module.Types().vec3( m_Module.Types().u32() ) } );
+
+    auto* globals_struct = m_Module.Types().Struct( m_SymbolTable.New( "globals_t" ), members );
+
+    auto* globals_var = m_Builder.Var( "globals",
+                                       m_Module.Types().ptr( tint::core::AddressSpace::kPrivate,
+                                                             globals_struct,
+                                                             tint::core::Access::kRead ) );
+
+    m_Module.root_block->Append( globals_var );
+
+    auto* main_func = m_Builder.ComputeFunction(
+        "wgsl_main", tint::core::i32( 1 ), tint::core::i32( 1 ), tint::core::i32( 1 ) );
+
+    auto* global_id_param =
+        m_Builder.FunctionParam( "global_id", m_Module.Types().vec3( m_Module.Types().u32() ) );
+    global_id_param->SetBuiltin( tint::core::BuiltinValue::kGlobalInvocationId );
+    main_func->SetParams( { global_id_param } );
+
+    m_Builder.Append( main_func->Block(), [&] {
+        auto* global_id = m_Builder.Access( m_TypeManager.vec3( m_TypeManager.u32() ),
+                                            globals_var,
+                                            m_Builder.Constant( tint::core::u32( 0 ) ) );
+
+        m_Builder.Store( global_id, global_id_param );
+
+        for ( auto& translator : m_Translators ) {
+            if ( translator->IsEntry() )
+                m_Builder.Call( translator->GetWGSLFunc() );
+        }
+
+        m_Builder.Return( main_func );
+    } );
+
+    for ( const auto& translator : m_Translators ) {
+        translator->Translate( globals_var );
+    }
 
     LOG_INFO << "<========= :: Finished Parsing :: =========>\n";
 
@@ -45,7 +83,8 @@ Backend::~Backend()
 
 void Backend::RegisterFunction( const llvm::Function& F )
 {
-    Translator translator( m_Module, m_Builder, m_SymbolTable, &F, isEntryPoint( F ) );
+    auto translator =
+        std::make_unique< Translator >( m_Module, m_Builder, m_SymbolTable, &F, isEntryPoint( F ) );
 
     const tint::core::type::Type* arg_type;
 
@@ -68,10 +107,8 @@ void Backend::RegisterFunction( const llvm::Function& F )
         }
 
         if ( arg_type )
-            translator.AddFunctionParam( arg.getName().str(), &arg, arg_type );
+            translator->AddFunctionParam( arg.getName().str(), &arg, arg_type );
     }
-
-    translator.Translate();
 
     m_Translators.push_back( std::move( translator ) );
 }
