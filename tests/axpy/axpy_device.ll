@@ -4,7 +4,7 @@ target datalayout = "e-i64:64-i128:128-v16:16-v32:32-n16:32:64"
 target triple = "nvptx64-nvidia-cuda"
 
 ; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(none)
-define dso_local noundef float @_Z8get_axpyfff(float noundef %a, float noundef %x, float noundef %y) local_unnamed_addr #0 {
+define dso_local noundef float @_Z4axpyfff(float noundef %a, float noundef %x, float noundef %y) local_unnamed_addr #0 {
 entry:
   %mul = fmul contract float %a, %x
   %add = fadd contract float %mul, %y
@@ -58,7 +58,7 @@ attributes #2 = { mustprogress nocallback nofree nosync nounwind speculatable wi
 !1 = !{i32 1, !"wchar_size", i32 4}
 !2 = !{i32 4, !"nvvm-reflect-ftz", i32 0}
 !3 = !{i32 7, !"frame-pointer", i32 2}
-!4 = !{!"Debian clang version 19.1.7 (3+b1)"}
+!4 = !{!"Debian clang version 19.1.7 (3+b2)"}
 !5 = !{!6, !6, i64 0}
 !6 = !{!"float", !7, i64 0}
 !7 = !{!"omnipotent char", !8, i64 0}

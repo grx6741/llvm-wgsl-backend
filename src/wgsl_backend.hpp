@@ -22,8 +22,7 @@ public:
     void RegisterFunction( const llvm::Function& F );
 
 private:
-    bool isKernelFunction( const llvm::Function& F );
-
+    bool isEntryPoint( const llvm::Function& F );
     const llvm::Type* isArgUsedAsArray( const llvm::Value* val,
                                         llvm::SmallSet< llvm::Value*, 32 >& visited );
 

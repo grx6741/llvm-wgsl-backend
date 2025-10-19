@@ -1,6 +1,7 @@
 #include "translator.hpp"
 #include "util.hpp"
 
+#include <cstdlib>
 #include <llvm/IR/Instructions.h>
 
 #include <cassert>
@@ -12,12 +13,12 @@ Translator::Translator( tint::core::ir::Module& M,
                         tint::core::ir::Builder& B,
                         tint::SymbolTable& ST,
                         const llvm::Function* F,
-                        bool isKernel )
+                        bool isEntry )
     : m_LLVMfunc{ F },
       m_Module{ M },
       m_Builder{ B },
       m_SymbolTable{ ST },
-      m_IsKernel{ isKernel },
+      m_IsEntry{ isEntry },
       m_GroupCounter{ 0 },
       m_BindingCounter{ 0 }
 {
@@ -27,26 +28,28 @@ Translator::Translator( tint::core::ir::Module& M,
     }
     const auto demangled_name = getDemangledName( m_LLVMfunc->getName().str() );
 
+    // m_WGSLfunc = m_Builder.Function(
+    //     demangled_name, MapLLVMtype2WGSLtype( m_Module, m_LLVMfunc->getReturnType() ) );
+
     m_WGSLfunc =
-        m_IsKernel
+        m_IsEntry
             ? m_Builder.ComputeFunction(
                   demangled_name, tint::core::i32( 1 ), tint::core::i32( 1 ), tint::core::i32( 1 ) )
             : m_Builder.Function( demangled_name,
                                   MapLLVMtype2WGSLtype( m_Module, m_LLVMfunc->getReturnType() ) );
 
-    LOG_INFO << ( m_IsKernel ? "Kernel" : "Normal" ) << " Function :: " << demangled_name
-             << ( m_IsKernel
-                      ? ""
-                      : " -> " + MapLLVMtype2WGSLtype( m_Module, m_LLVMfunc->getReturnType() )
-                                     ->FriendlyName() )
+    LOG_INFO << ( m_IsEntry ? "Entry" : "Normal" ) << " Function :: " << demangled_name
+             << ( m_IsEntry ? ""
+                            : " -> " + MapLLVMtype2WGSLtype( m_Module, m_LLVMfunc->getReturnType() )
+                                           ->FriendlyName() )
              << LOG_END;
 }
 
 void Translator::AddFunctionBuiltinParam( const llvm::Value* llvm_param,
                                           const tint::core::BuiltinValue param )
 {
-    if ( !m_WGSLfunc->IsCompute() )
-        return;
+    // if ( !m_WGSLfunc->IsCompute() )
+    //     return;
 
     const tint::core::type::Type* type;
     switch ( param ) {
@@ -72,7 +75,7 @@ void Translator::AddFunctionParam( const std::string_view& name,
                                    const tint::core::type::Type* type,
                                    tint::core::BuiltinValue builtin_type )
 {
-    if ( m_IsKernel ) {
+    if ( m_IsEntry ) {
         if ( type->Is< tint::core::type::Array >() ) {
             LOG_INFO << "    Param< " << type->FriendlyName() << " > " << name << LOG_END;
         }
@@ -94,50 +97,9 @@ void Translator::AddFunctionParam( const std::string_view& name,
     }
 }
 
-void Translator::TranslateBody()
+void Translator::Translate()
 {
-    if ( m_IsKernel ) {
-        if ( m_StructParamMembers.Length() > 0 ) {
-            auto* struct_param_t = m_Module.Types().Struct(
-                m_SymbolTable.New( m_Module.NameOf( m_WGSLfunc ).to_str() + "_struct_param_t" ),
-                m_StructParamMembers );
-
-            auto* uniform_struct_param = m_Builder.Var(
-                std::string( "uniform_" ) + m_Module.NameOf( m_WGSLfunc ).to_str() + "params",
-                m_Module.Types().ptr( tint::core::AddressSpace::kUniform, struct_param_t ) );
-
-            uniform_struct_param->SetBindingPoint( m_GroupCounter, m_BindingCounter++ );
-
-            m_Module.root_block->Append( uniform_struct_param );
-        }
-        return;
-    }
-
-    if ( !m_FunctionParams.IsEmpty() )
-        m_WGSLfunc->SetParams( m_FunctionParams );
-
-    const auto func_body = [&] {
-        for ( const llvm::BasicBlock& BB : *m_LLVMfunc ) {
-            for ( const llvm::Instruction& I : BB ) {
-#define VISIT_INST( inst )                                                                         \
-    case llvm::Instruction::inst:                                                                  \
-        visit##inst( I );                                                                          \
-        break;
-                switch ( I.getOpcode() ) {
-                    VISIT_INST( FAdd );
-                    VISIT_INST( FMul );
-                    VISIT_INST( Ret );
-                    VISIT_INST( Alloca );
-                    VISIT_INST( Store );
-                    default:
-                        LOG_WARN << I.getOpcodeName() << " instruction NOT IMPLEMENTED \n";
-                }
-#undef VISIT_INST
-            }
-        }
-    };
-
-    m_Builder.Append( m_WGSLfunc->Block(), func_body );
+    m_IsEntry ? translateKernelFunction() : translateNormalFunction();
 }
 
 // Private Methods
@@ -212,6 +174,60 @@ tint::core::ir::Value* Translator::getOperand( const llvm::Instruction& I, int o
     return m_ValueMap.at( I.getOperand( op_idx ) );
 }
 
+void Translator::translateKernelFunction()
+{
+    if ( m_StructParamMembers.Length() > 0 ) {
+        auto* struct_param_t = m_Module.Types().Struct(
+            m_SymbolTable.New( m_Module.NameOf( m_WGSLfunc ).to_str() + "_struct_param_t" ),
+            m_StructParamMembers );
+
+        auto* uniform_struct_param = m_Builder.Var(
+            std::string( "uniform_" ) + m_Module.NameOf( m_WGSLfunc ).to_str() + "params",
+            m_Module.Types().ptr( tint::core::AddressSpace::kUniform, struct_param_t ) );
+
+        uniform_struct_param->SetBindingPoint( m_GroupCounter, m_BindingCounter++ );
+
+        m_Module.root_block->Append( uniform_struct_param );
+    }
+
+    // translateFunctionBody();
+}
+
+void Translator::translateNormalFunction()
+{
+    if ( !m_FunctionParams.IsEmpty() )
+        m_WGSLfunc->SetParams( m_FunctionParams );
+
+    translateFunctionBody();
+}
+
+void Translator::translateFunctionBody()
+{
+    const auto func_body = [&] {
+        for ( const llvm::BasicBlock& BB : *m_LLVMfunc ) {
+            for ( const llvm::Instruction& I : BB ) {
+#define VISIT_INST( inst )                                                                         \
+    case llvm::Instruction::inst:                                                                  \
+        visit##inst( I );                                                                          \
+        break;
+                switch ( I.getOpcode() ) {
+                    VISIT_INST( FAdd );
+                    VISIT_INST( FMul );
+                    VISIT_INST( Ret );
+                    VISIT_INST( Alloca );
+                    VISIT_INST( Store );
+                    VISIT_INST( Call );
+                    default:
+                        LOG_WARN << I.getOpcodeName() << " instruction NOT IMPLEMENTED \n";
+                }
+#undef VISIT_INST
+            }
+        }
+    };
+
+    m_Builder.Append( m_WGSLfunc->Block(), func_body );
+}
+
 // Intruction Visitors
 void Translator::visitFAdd( const llvm::Instruction& I )
 {
@@ -280,5 +296,16 @@ void Translator::visitAlloca( const llvm::Instruction& I )
 
 void Translator::visitStore( const llvm::Instruction& I )
 {}
+
+
+void Translator::visitCall( const llvm::Instruction& I )
+{
+    const auto* inst = llvm::dyn_cast< llvm::CallInst >( &I );
+    const auto* callee = inst->getCalledFunction();
+
+    std::string_view callee_name = callee->getName();
+
+    // TODO
+}
 
 } // namespace WGSL

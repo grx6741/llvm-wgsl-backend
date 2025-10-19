@@ -33,11 +33,11 @@ public:
     void AddFunctionBuiltinParam( const llvm::Value* llvm_param,
                                   const tint::core::BuiltinValue param );
 
-    void TranslateBody();
+    void Translate();
 
-    inline const bool isKernel()
+    inline const bool IsEntry()
     {
-        return m_IsKernel;
+        return m_IsEntry;
     }
 
 private:
@@ -45,12 +45,17 @@ private:
 
     tint::core::ir::Value* getOperand( const llvm::Instruction& I, int op_idx );
 
+    void translateKernelFunction();
+    void translateNormalFunction();
+    void translateFunctionBody();
+
     // Intruction Visitors
     void visitFAdd( const llvm::Instruction& I );
     void visitFMul( const llvm::Instruction& I );
     void visitRet( const llvm::Instruction& I );
     void visitAlloca( const llvm::Instruction& I );
     void visitStore( const llvm::Instruction& I );
+    void visitCall( const llvm::Instruction& I );
 
 private:
     std::unordered_map< const llvm::Value*, tint::core::ir::Value* > m_ValueMap;
@@ -62,7 +67,7 @@ private:
     tint::Vector< tint::core::type::Manager::StructMemberDesc, 3 > m_StructParamMembers;
     tint::Vector< tint::core::ir::FunctionParam*, 3 > m_FunctionParams;
 
-    bool m_IsKernel;
+    bool m_IsEntry;
 
     uint32_t m_GroupCounter;
     uint32_t m_BindingCounter;

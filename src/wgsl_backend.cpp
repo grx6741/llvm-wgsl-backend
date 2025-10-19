@@ -25,6 +25,9 @@ Backend::Backend()
 
 Backend::~Backend()
 {
+    // m_Builder.ComputeFunction(
+    //     "wgsl_main", tint::core::i32( 1 ), tint::core::i32( 1 ), tint::core::i32( 1 ) );
+
     LOG_INFO << "<========= :: Finished Parsing :: =========>\n";
 
     tint::wgsl::writer::ProgramOptions program_options;
@@ -42,8 +45,7 @@ Backend::~Backend()
 
 void Backend::RegisterFunction( const llvm::Function& F )
 {
-    m_Translators.emplace_back( m_Module, m_Builder, m_SymbolTable, &F, isKernelFunction( F ) );
-    auto& translator = m_Translators.back();
+    Translator translator( m_Module, m_Builder, m_SymbolTable, &F, isEntryPoint( F ) );
 
     const tint::core::type::Type* arg_type;
 
@@ -69,12 +71,14 @@ void Backend::RegisterFunction( const llvm::Function& F )
             translator.AddFunctionParam( arg.getName().str(), &arg, arg_type );
     }
 
-    translator.TranslateBody();
+    translator.Translate();
+
+    m_Translators.push_back( std::move( translator ) );
 }
 
 // Private Methods
 
-bool Backend::isKernelFunction( const llvm::Function& F )
+bool Backend::isEntryPoint( const llvm::Function& F )
 {
     const llvm::Module* M = F.getParent();
     if ( !M )
