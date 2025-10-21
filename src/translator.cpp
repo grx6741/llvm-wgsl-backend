@@ -9,21 +9,27 @@
 namespace WGSL
 {
 
-const std::unordered_map< std::string, int > WGSLintrinsicMap = {
-    { "llvm.nvvm.read.ptx.sreg.ctaid.x", 1 },
-    { "llvm.nvvm.read.ptx.sreg.ctaid.y", 1 },
-    { "llvm.nvvm.read.ptx.sreg.ctaid.z", 1 } };
+struct IntrinsicData
+{
+    tint::core::type::Type* type;
+    int index;
+
+    IntrinsicData( tint::core::type::Type* type, int index ) : type{ type }, index{ index }
+    {}
+};
 
 
 Translator::Translator( tint::core::ir::Module& M,
                         tint::core::ir::Builder& B,
                         tint::SymbolTable& ST,
+                        Globals& G,
                         const llvm::Function* F,
                         bool isEntry )
     : m_LLVMfunc{ F },
       m_Module{ M },
       m_Builder{ B },
       m_SymbolTable{ ST },
+      m_Globals{ G },
       m_IsEntry{ isEntry },
       m_GroupCounter{ 0 },
       m_BindingCounter{ 0 }
@@ -33,23 +39,8 @@ Translator::Translator( tint::core::ir::Module& M,
         return;
     }
     m_DemangledName = getDemangledName( m_LLVMfunc->getName().str() );
-    LOG_INFO << "LLVM function name: '" << m_LLVMfunc->getName().str() << "'" << LOG_END;
-    LOG_INFO << "Demangled name: '" << m_DemangledName << "'" << LOG_END;
-
     m_WGSLfunc = m_Builder.Function(
         m_DemangledName, MapLLVMtype2WGSLtype( m_Module, m_LLVMfunc->getReturnType() ) );
-
-    LOG_INFO << "WGSL function name after creation: '" << m_Module.NameOf( m_WGSLfunc ).to_str()
-             << "'" << LOG_END;
-
-    // m_WGSLfunc =
-    //     m_IsEntry
-    //         ? m_Builder.ComputeFunction(
-    //               demangled_name, tint::core::i32( 1 ), tint::core::i32( 1 ), tint::core::i32( 1
-    //               ) )
-    //         : m_Builder.Function( demangled_name,
-    //                               MapLLVMtype2WGSLtype( m_Module, m_LLVMfunc->getReturnType() )
-    //                               );
 
     LOG_INFO << ( m_IsEntry ? "Entry" : "Normal" ) << " Function :: " << m_DemangledName
              << ( m_IsEntry ? ""
@@ -81,8 +72,11 @@ void Translator::AddFunctionParam( const std::string_view& name,
         }
         else {
             LOG_INFO << "    Param< " << type->FriendlyName() << " > " << name << LOG_END;
-            m_StructParamMembers.Push(
-                tint::core::type::Manager::StructMemberDesc{ m_SymbolTable.New( name ), type } );
+            // m_StructParamMembers.Push(
+            //     tint::core::type::Manager::StructMemberDesc{ m_SymbolTable.New( name ), type } );
+
+            m_StructParamMembers[llvm_param] =
+                tint::core::type::Manager::StructMemberDesc{ m_SymbolTable.New( name ), type };
         }
     }
     else {
@@ -97,7 +91,7 @@ void Translator::AddFunctionParam( const std::string_view& name,
     }
 }
 
-void Translator::Translate( tint::core::ir::Var* globals )
+void Translator::Translate()
 {
     m_IsEntry ? translateKernelFunction() : translateNormalFunction();
 }
@@ -176,9 +170,20 @@ tint::core::ir::Value* Translator::getOperand( const llvm::Instruction& I, int o
 
 void Translator::translateKernelFunction()
 {
-    if ( m_StructParamMembers.Length() > 0 ) {
+    if ( m_StructParamMembers.size() > 0 ) {
+        tint::Vector< tint::core::type::Manager::StructMemberDesc, 3 > struct_params;
+        struct_params.Reserve( m_StructParamMembers.size() );
+
+        std::unordered_map< const llvm::Value*, uint32_t > param_to_index;
+        uint32_t index = 0;
+
+        for ( const auto& [llvm_value, wgsl_param] : m_StructParamMembers ) {
+            struct_params.Push( wgsl_param );
+            param_to_index[llvm_value] = index++;
+        }
+
         auto struct_name = m_SymbolTable.New( m_DemangledName + "_params_t" );
-        auto* struct_type = m_Module.Types().Struct( struct_name, m_StructParamMembers );
+        auto* struct_type = m_Module.Types().Struct( struct_name, struct_params );
 
         auto* uniform_ptr_type = m_Module.Types().ptr(
             tint::core::AddressSpace::kUniform, struct_type, tint::core::Access::kRead );
@@ -189,6 +194,20 @@ void Translator::translateKernelFunction()
         uniform_var->SetBindingPoint( m_GroupCounter, m_BindingCounter++ );
 
         m_Module.root_block->Append( uniform_var );
+
+        for ( const auto& [llvm_value, member_idx] : param_to_index ) {
+            // Create: uniform_params.member[idx]
+            // This gives us a pointer to the struct member
+            auto* access =
+                m_Builder.Access( m_Module.Types().ptr( tint::core::AddressSpace::kUniform,
+                                                        m_StructParamMembers[llvm_value].type,
+                                                        tint::core::Access::kRead ),
+                                  uniform_var->Result(),
+                                  m_Builder.Constant( tint::core::u32( member_idx ) ) );
+
+            // Map the LLVM argument to this access result
+            m_ValueMap[llvm_value] = access->Result();
+        }
     }
 
     translateFunctionBody();
@@ -283,8 +302,12 @@ void Translator::translateFunctionBody()
                 switch ( I.getOpcode() ) {
                     VISIT_INST( FAdd );
                     VISIT_INST( FMul );
+                    VISIT_INST( Add );
+                    VISIT_INST( Mul );
                     VISIT_INST( Ret );
                     VISIT_INST( Call );
+                    VISIT_INST( ICmp );
+                    VISIT_INST( Br );
                     default:
                         LOG_WARN << I.getOpcodeName() << " instruction NOT IMPLEMENTED \n";
                 }
@@ -300,11 +323,27 @@ void Translator::translateFunctionBody()
 void Translator::visitFAdd( const llvm::Instruction& I )
 {
     auto* lhs = getOperand( I, 0 );
-    if ( !lhs )
-        return;
     auto* rhs = getOperand( I, 1 );
-    if ( !rhs )
+
+    if ( !lhs || !rhs ) {
+        LOG_ERROR << "Failed to get operands for FAdd" << LOG_END;
         return;
+    }
+
+    const auto* type = MapLLVMtype2WGSLtype( m_Module, I.getType() );
+
+    m_ValueMap[&I] = m_Builder.Add( type, lhs, rhs )->Result();
+}
+
+void Translator::visitAdd( const llvm::Instruction& I )
+{
+    auto* lhs = getOperand( I, 0 );
+    auto* rhs = getOperand( I, 1 );
+
+    if ( !lhs || !rhs ) {
+        LOG_ERROR << "Failed to get operands for Add" << LOG_END;
+        return;
+    }
 
     const auto* type = MapLLVMtype2WGSLtype( m_Module, I.getType() );
 
@@ -314,11 +353,27 @@ void Translator::visitFAdd( const llvm::Instruction& I )
 void Translator::visitFMul( const llvm::Instruction& I )
 {
     auto* lhs = getOperand( I, 0 );
-    if ( !lhs )
-        return;
     auto* rhs = getOperand( I, 1 );
-    if ( !rhs )
+
+    if ( !lhs || !rhs ) {
+        LOG_ERROR << "Failed to get operands for FMul" << LOG_END;
         return;
+    }
+
+    const auto* type = MapLLVMtype2WGSLtype( m_Module, I.getType() );
+
+    m_ValueMap[&I] = m_Builder.Multiply( type, lhs, rhs )->Result();
+}
+
+void Translator::visitMul( const llvm::Instruction& I )
+{
+    auto* lhs = getOperand( I, 0 );
+    auto* rhs = getOperand( I, 1 );
+
+    if ( !lhs || !rhs ) {
+        LOG_ERROR << "Failed to get operands for Mul" << LOG_END;
+        return;
+    }
 
     const auto* type = MapLLVMtype2WGSLtype( m_Module, I.getType() );
 
@@ -360,7 +415,69 @@ void Translator::visitCall( const llvm::Instruction& I )
 
     std::string_view callee_name = callee->getName();
 
-    // TODO
+    if ( auto* accessor = m_Globals.GetIntrinsicAccessor( callee_name ) ) {
+        LOG_INFO << "    Translated intrinsic: " << callee_name << " -> "
+                 << m_Module.NameOf( accessor ).Name() << LOG_END;
+
+        // Call the accessor function
+        auto* call = m_Builder.Call( accessor );
+        m_ValueMap[&I] = call->Result();
+        return;
+    }
 }
+
+void Translator::visitICmp( const llvm::Instruction& I )
+{
+    const auto* cmp = llvm::cast< llvm::ICmpInst >( &I );
+
+    auto* lhs = getOperand( I, 0 );
+    auto* rhs = getOperand( I, 1 );
+
+    if ( !lhs || !rhs ) {
+        LOG_ERROR << "Failed to get operands for ICmp" << LOG_END;
+        return;
+    }
+
+    auto predicate = cmp->getPredicate();
+    tint::core::ir::Binary* result = nullptr;
+
+    // Map LLVM predicates to Tint IR operations
+    switch ( predicate ) {
+        case llvm::ICmpInst::ICMP_EQ:
+            result = m_Builder.Equal( m_Module.Types().bool_(), lhs, rhs );
+            break;
+        case llvm::ICmpInst::ICMP_NE:
+            result = m_Builder.NotEqual( m_Module.Types().bool_(), lhs, rhs );
+            break;
+        case llvm::ICmpInst::ICMP_SLT: // Signed less than
+        case llvm::ICmpInst::ICMP_ULT: // Unsigned less than
+            result = m_Builder.LessThan( m_Module.Types().bool_(), lhs, rhs );
+            break;
+        case llvm::ICmpInst::ICMP_SLE: // Signed less or equal
+        case llvm::ICmpInst::ICMP_ULE: // Unsigned less or equal
+            result = m_Builder.LessThanEqual( m_Module.Types().bool_(), lhs, rhs );
+            break;
+        case llvm::ICmpInst::ICMP_SGT: // Signed greater than
+        case llvm::ICmpInst::ICMP_UGT: // Unsigned greater than
+            result = m_Builder.GreaterThan( m_Module.Types().bool_(), lhs, rhs );
+            break;
+        case llvm::ICmpInst::ICMP_SGE: // Signed greater or equal
+        case llvm::ICmpInst::ICMP_UGE: // Unsigned greater or equal
+            result = m_Builder.GreaterThanEqual( m_Module.Types().bool_(), lhs, rhs );
+            break;
+        default:
+            LOG_ERROR << "Unsupported ICmp predicate: " << cmp->getPredicateName( predicate )
+                      << LOG_END;
+            return;
+    }
+
+    if ( result ) {
+        m_ValueMap[&I] = result->Result();
+        LOG_INFO << "    ICmp: " << cmp->getPredicateName( predicate ) << LOG_END;
+    }
+}
+
+void Translator::visitBr( const llvm::Instruction& I )
+{}
 
 } // namespace WGSL

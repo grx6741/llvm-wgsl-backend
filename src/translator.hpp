@@ -6,9 +6,9 @@
 #include <llvm/ADT/SmallSet.h>
 
 #include "src/tint/lang/core/ir/builder.h"
-#include "src/tint/lang/core/ir/var.h"
 
 #include <unordered_map>
+#include "globals.hpp"
 
 namespace WGSL
 {
@@ -19,6 +19,7 @@ public:
     Translator( tint::core::ir::Module& M,
                 tint::core::ir::Builder& B,
                 tint::SymbolTable& ST,
+                Globals& G,
                 const llvm::Function* F,
                 bool isKernel = false );
 
@@ -34,7 +35,7 @@ public:
         const tint::core::type::Type* type,
         tint::core::BuiltinValue builtin_type = tint::core::BuiltinValue::kUndefined );
 
-    void Translate( tint::core::ir::Var* globals );
+    void Translate();
 
     inline const bool IsEntry()
     {
@@ -50,6 +51,7 @@ private:
     const std::string getDemangledName( const std::string& mangled_name );
 
     tint::core::ir::Value* getOperand( const llvm::Instruction& I, int op_idx );
+
     bool isArgReadOnly( const llvm::Argument* arg );
     bool isPointerWritten( const llvm::Argument* arg );
 
@@ -60,8 +62,12 @@ private:
     // Intruction Visitors
     void visitFAdd( const llvm::Instruction& I );
     void visitFMul( const llvm::Instruction& I );
+    void visitAdd( const llvm::Instruction& I );
+    void visitMul( const llvm::Instruction& I );
     void visitRet( const llvm::Instruction& I );
     void visitCall( const llvm::Instruction& I );
+    void visitICmp( const llvm::Instruction& I );
+    void visitBr( const llvm::Instruction& I );
 
 private:
     std::unordered_map< const llvm::Value*, tint::core::ir::Value* > m_ValueMap;
@@ -70,7 +76,9 @@ private:
 
     tint::core::ir::Function* m_WGSLfunc;
     tint::Vector< tint::core::ir::FunctionParam*, 3 > m_ComputeBuiltinParams;
-    tint::Vector< tint::core::type::Manager::StructMemberDesc, 3 > m_StructParamMembers;
+
+    std::unordered_map< const llvm::Value*, tint::core::type::Manager::StructMemberDesc >
+        m_StructParamMembers;
     tint::Vector< tint::core::ir::FunctionParam*, 3 > m_FunctionParams;
 
     bool m_IsEntry;
@@ -81,6 +89,7 @@ private:
     tint::core::ir::Module& m_Module;
     tint::core::ir::Builder& m_Builder;
     tint::SymbolTable& m_SymbolTable;
+    Globals& m_Globals;
 
     llvm::ItaniumPartialDemangler m_Demangler;
     std::string m_DemangledName;

@@ -88,7 +88,12 @@ endif()
 add_library(llvm2wgsl SHARED 
     src/main.cpp
     src/wgsl_backend.cpp
+    src/wgsl_backend.hpp
     src/translator.cpp
+    src/translator.hpp
+    src/util.hpp
+    src/globals.cpp
+    src/globals.hpp
 )
 
 target_link_libraries(llvm2wgsl "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>" 
