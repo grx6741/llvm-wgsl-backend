@@ -2,22 +2,25 @@
 #include "util.hpp"
 
 #include <cstdlib>
-#include <llvm/IR/Instructions.h>
 
 #include <cassert>
 
 namespace WGSL
 {
 
-struct IntrinsicData
+void Translator::RegisterWGSLFunction( const llvm::Function* llvm_func,
+                                       tint::core::ir::Function* wgsl_func )
 {
-    tint::core::type::Type* type;
-    int index;
+    s_FunctionMap[llvm_func] = wgsl_func;
+}
 
-    IntrinsicData( tint::core::type::Type* type, int index ) : type{ type }, index{ index }
-    {}
-};
+tint::core::ir::Function* Translator::GetWGSLFunction( const llvm::Function* llvm_func )
+{
+    auto it = s_FunctionMap.find( llvm_func );
+    return ( it != s_FunctionMap.end() ) ? it->second : nullptr;
+}
 
+std::unordered_map< const llvm::Function*, tint::core::ir::Function* > Translator::s_FunctionMap;
 
 Translator::Translator( tint::core::ir::Module& M,
                         tint::core::ir::Builder& B,
@@ -170,10 +173,11 @@ tint::core::ir::Value* Translator::getOperand( const llvm::Instruction& I, int o
 
 void Translator::translateKernelFunction()
 {
-    if ( m_StructParamMembers.size() > 0 ) {
-        tint::Vector< tint::core::type::Manager::StructMemberDesc, 3 > struct_params;
-        struct_params.Reserve( m_StructParamMembers.size() );
+    // Create uniform struct if we have scalar parameters
+    tint::core::ir::Var* uniform_var = nullptr;
 
+    if ( !m_StructParamMembers.empty() ) {
+        tint::Vector< tint::core::type::Manager::StructMemberDesc, 8 > struct_params;
         std::unordered_map< const llvm::Value*, uint32_t > param_to_index;
         uint32_t index = 0;
 
@@ -189,27 +193,18 @@ void Translator::translateKernelFunction()
             tint::core::AddressSpace::kUniform, struct_type, tint::core::Access::kRead );
 
         auto var_name = m_DemangledName + "_params";
-        auto* uniform_var = m_Builder.Var( var_name, uniform_ptr_type );
+        uniform_var = m_Builder.Var( var_name, uniform_ptr_type );
 
         uniform_var->SetBindingPoint( m_GroupCounter, m_BindingCounter++ );
-
         m_Module.root_block->Append( uniform_var );
 
-        for ( const auto& [llvm_value, member_idx] : param_to_index ) {
-            // Create: uniform_params.member[idx]
-            // This gives us a pointer to the struct member
-            auto* access =
-                m_Builder.Access( m_Module.Types().ptr( tint::core::AddressSpace::kUniform,
-                                                        m_StructParamMembers[llvm_value].type,
-                                                        tint::core::Access::kRead ),
-                                  uniform_var->Result(),
-                                  m_Builder.Constant( tint::core::u32( member_idx ) ) );
-
-            // Map the LLVM argument to this access result
-            m_ValueMap[llvm_value] = access->Result();
-        }
+        // Store the mapping for later use inside the function
+        m_UniformVar = uniform_var;
+        m_ParamToIndex = param_to_index;
     }
 
+    // Now translate the function body
+    // The parameter loading will happen at the start of translateFunctionBody
     translateFunctionBody();
 }
 
@@ -292,31 +287,200 @@ bool Translator::isPointerWritten( const llvm::Argument* arg )
 
 void Translator::translateFunctionBody()
 {
-    const auto func_body = [&] {
-        for ( const llvm::BasicBlock& BB : *m_LLVMfunc ) {
-            for ( const llvm::Instruction& I : BB ) {
+    if ( !m_LLVMfunc || m_LLVMfunc->empty() ) {
+        return;
+    }
+
+    const llvm::BasicBlock* entry = &m_LLVMfunc->getEntryBlock();
+
+    m_Builder.Append( m_WGSLfunc->Block(), [&] {
+        // FIRST: Load kernel parameters from uniform struct
+        if ( m_IsEntry && m_UniformVar ) {
+            for ( const auto& [llvm_value, member_idx] : m_ParamToIndex ) {
+                auto* member_type = m_StructParamMembers[llvm_value].type;
+
+                auto* member_ptr =
+                    m_Builder.Access( m_Module.Types().ptr( tint::core::AddressSpace::kUniform,
+                                                            member_type,
+                                                            tint::core::Access::kRead ),
+                                      m_UniformVar->Result(),
+                                      m_Builder.Constant( tint::core::u32( member_idx ) ) );
+
+                // Load the value
+                auto* loaded = m_Builder.Load( member_ptr );
+
+                // Store loaded VALUE in value map
+                m_ValueMap[llvm_value] = loaded->Result();
+
+                LOG_INFO << "    Loaded parameter from uniform struct" << LOG_END;
+            }
+        }
+
+        // THEN: Translate the basic blocks
+        translateBasicBlock( entry, [&]() {} );
+    } );
+}
+
+void Translator::translateBasicBlock( const llvm::BasicBlock* BB,
+                                      std::function< void() > append_context )
+{
+    if ( m_TranslatedBlocks.count( BB ) ) {
+        return;
+    }
+    m_TranslatedBlocks.insert( BB );
+
+    LOG_INFO << "Translating BasicBlock: " << BB->getName() << LOG_END;
+
+    for ( auto it = BB->begin(); it != BB->end(); ++it ) {
+        const llvm::Instruction& I = *it;
+
+        if ( I.isTerminator() ) {
+            break;
+        }
+
 #define VISIT_INST( inst )                                                                         \
     case llvm::Instruction::inst:                                                                  \
         visit##inst( I );                                                                          \
         break;
-                switch ( I.getOpcode() ) {
-                    VISIT_INST( FAdd );
-                    VISIT_INST( FMul );
-                    VISIT_INST( Add );
-                    VISIT_INST( Mul );
-                    VISIT_INST( Ret );
-                    VISIT_INST( Call );
-                    VISIT_INST( ICmp );
-                    VISIT_INST( Br );
-                    default:
-                        LOG_WARN << I.getOpcodeName() << " instruction NOT IMPLEMENTED \n";
-                }
+        switch ( I.getOpcode() ) {
+            VISIT_INST( FAdd );
+            VISIT_INST( FMul );
+            VISIT_INST( Add );
+            VISIT_INST( Mul );
+            VISIT_INST( Call );
+            VISIT_INST( ICmp );
+            VISIT_INST( Load );
+            VISIT_INST( GetElementPtr );
+            VISIT_INST( SExt );
+            VISIT_INST( Store );
 #undef VISIT_INST
+            default:
+                LOG_WARN << I.getOpcodeName() << " instruction NOT IMPLEMENTED" << LOG_END;
+        }
+    }
+
+    const llvm::Instruction* terminator = BB->getTerminator();
+    if ( !terminator ) {
+        LOG_ERROR << "BasicBlock has no terminator!" << LOG_END;
+        return;
+    }
+
+    if ( const auto* ret = llvm::dyn_cast< llvm::ReturnInst >( terminator ) ) {
+        visitRet( *ret );
+    }
+    else if ( const auto* br = llvm::dyn_cast< llvm::BranchInst >( terminator ) ) {
+        handleBranch( br );
+    }
+    else {
+        LOG_WARN << "Unhandled terminator: " << terminator->getOpcodeName() << LOG_END;
+    }
+}
+
+bool Translator::isJustBranchTo( const llvm::BasicBlock* BB, const llvm::BasicBlock* target )
+{
+    if ( !target )
+        return false;
+
+    // Count non-branch instructions
+    size_t inst_count = 0;
+    for ( const auto& I : *BB ) {
+        if ( !I.isTerminator() ) {
+            inst_count++;
+        }
+    }
+
+    // If only terminator exists, check if it branches to target
+    if ( inst_count == 0 ) {
+        if ( const auto* br = llvm::dyn_cast< llvm::BranchInst >( BB->getTerminator() ) ) {
+            if ( br->isUnconditional() && br->getSuccessor( 0 ) == target ) {
+                return true;
             }
         }
-    };
+    }
 
-    m_Builder.Append( m_WGSLfunc->Block(), func_body );
+    return false;
+}
+
+void Translator::handleBranch( const llvm::BranchInst* br )
+{
+    if ( br->isUnconditional() ) {
+        const llvm::BasicBlock* successor = br->getSuccessor( 0 );
+        translateBasicBlock( successor, [&]() {} );
+    }
+    else {
+        const llvm::BasicBlock* true_block = br->getSuccessor( 0 );
+        const llvm::BasicBlock* false_block = br->getSuccessor( 1 );
+
+        llvm::Value* condition = br->getCondition();
+        auto* cond_value = m_ValueMap.at( condition );
+
+        LOG_INFO << "    Creating If statement" << LOG_END;
+        LOG_INFO << "      True block: " << true_block->getName() << LOG_END;
+        LOG_INFO << "      False block: " << false_block->getName() << LOG_END;
+
+        const llvm::BasicBlock* merge_block = findMergeBlock( true_block, false_block );
+
+        if ( merge_block ) {
+            LOG_INFO << "      Merge block: " << merge_block->getName() << LOG_END;
+        }
+
+        // Create If instruction
+        auto* if_inst = m_Builder.If( cond_value );
+
+        // Translate true block
+        m_Builder.Append( if_inst->True(), [&] {
+            if ( !isJustBranchTo( true_block, merge_block ) ) {
+                translateBasicBlock( true_block, [&]() {} );
+            }
+        } );
+
+        // Translate false block (if it's not the merge block)
+        if ( false_block != merge_block ) {
+            m_Builder.Append( if_inst->False(), [&] {
+                if ( !isJustBranchTo( false_block, merge_block ) ) {
+                    translateBasicBlock( false_block, [&]() {} );
+                }
+            } );
+        }
+
+        // Continue with merge block
+        if ( merge_block ) {
+            translateBasicBlock( merge_block, [&]() {} );
+        }
+    }
+}
+
+const llvm::BasicBlock* Translator::findMergeBlock( const llvm::BasicBlock* true_block,
+                                                    const llvm::BasicBlock* false_block )
+{
+    if ( !true_block || !false_block )
+        return nullptr;
+
+    // Get true block's successors
+    std::unordered_set< const llvm::BasicBlock* > true_successors;
+    const auto* true_term = true_block->getTerminator();
+    if ( const auto* br = llvm::dyn_cast< llvm::BranchInst >( true_term ) ) {
+        for ( unsigned i = 0; i < br->getNumSuccessors(); ++i ) {
+            true_successors.insert( br->getSuccessor( i ) );
+        }
+    }
+
+    // Check if false_block itself is the merge
+    if ( true_successors.count( false_block ) ) {
+        return false_block;
+    }
+
+    // Check false block's successors
+    const auto* false_term = false_block->getTerminator();
+    if ( const auto* br = llvm::dyn_cast< llvm::BranchInst >( false_term ) ) {
+        for ( unsigned i = 0; i < br->getNumSuccessors(); ++i ) {
+            if ( true_successors.count( br->getSuccessor( i ) ) ) {
+                return br->getSuccessor( i );
+            }
+        }
+    }
+
+    return nullptr;
 }
 
 // Intruction Visitors
@@ -410,20 +574,58 @@ void Translator::visitRet( const llvm::Instruction& I )
 
 void Translator::visitCall( const llvm::Instruction& I )
 {
+    LOG_INFO << "    visitCall for: " << I << LOG_END;
+
+    // Use isa instead of dyn_cast for checking
+    if ( !llvm::isa< llvm::CallInst >( &I ) ) {
+        LOG_ERROR << "Instruction is not a CallInst!" << LOG_END;
+        LOG_ERROR << "    Opcode: " << I.getOpcodeName() << LOG_END;
+        LOG_ERROR << "    Type ID: " << I.getOpcode() << LOG_END;
+        return;
+    }
     const auto* inst = llvm::dyn_cast< llvm::CallInst >( &I );
+    if ( !inst ) {
+        LOG_ERROR << "Failed to cast to CallInst" << LOG_END;
+        return;
+    }
+
     const auto* callee = inst->getCalledFunction();
+    if ( !callee ) {
+        LOG_WARN << "Indirect call not supported" << LOG_END;
+        return;
+    }
 
-    std::string_view callee_name = callee->getName();
+    std::string callee_name = callee->getName().str();
+    LOG_INFO << "    Call to: " << callee_name << LOG_END;
 
+    // 1. Check if it's an intrinsic
     if ( auto* accessor = m_Globals.GetIntrinsicAccessor( callee_name ) ) {
-        LOG_INFO << "    Translated intrinsic: " << callee_name << " -> "
-                 << m_Module.NameOf( accessor ).Name() << LOG_END;
-
-        // Call the accessor function
         auto* call = m_Builder.Call( accessor );
         m_ValueMap[&I] = call->Result();
         return;
     }
+
+    // 2. Check if it's a translated function
+    if ( auto* wgsl_func = GetWGSLFunction( callee ) ) {
+        // Build argument list
+        tint::Vector< tint::core::ir::Value*, 8 > args;
+        for ( unsigned i = 0; i < inst->arg_size(); ++i ) {
+            auto* arg = getOperand( I, i );
+            if ( !arg ) {
+                LOG_ERROR << "Failed to get argument " << i << LOG_END;
+                return;
+            }
+            args.Push( arg );
+        }
+
+        auto* call = m_Builder.Call( wgsl_func, args );
+        m_ValueMap[&I] = call->Result();
+
+        LOG_INFO << "      Called WGSL function with " << args.Length() << " args" << LOG_END;
+        return;
+    }
+
+    LOG_ERROR << "Unknown function call: " << callee_name << LOG_END;
 }
 
 void Translator::visitICmp( const llvm::Instruction& I )
@@ -479,5 +681,85 @@ void Translator::visitICmp( const llvm::Instruction& I )
 
 void Translator::visitBr( const llvm::Instruction& I )
 {}
+
+void Translator::visitLoad( const llvm::Instruction& I )
+{
+    auto* ptr = getOperand( I, 0 );
+    if ( !ptr )
+        return;
+
+    auto* load = m_Builder.Load( ptr );
+    m_ValueMap[&I] = load->Result();
+
+    LOG_INFO << "    Load from " << I.getOperand( 0 )->getName() << LOG_END;
+}
+
+void Translator::visitGetElementPtr( const llvm::Instruction& I )
+{
+    const auto* gep = llvm::cast< llvm::GetElementPtrInst >( &I );
+
+    auto* base = getOperand( I, gep->getPointerOperandIndex() );
+    if ( !base ) {
+        LOG_ERROR << "Failed to get base pointer for GEP" << LOG_END;
+        return;
+    }
+
+    LOG_INFO << "    GEP: " << gep->getNumIndices() << " indices" << LOG_END;
+
+    if ( gep->getNumIndices() == 1 ) {
+        // Get the index
+        auto* index = getOperand( I, gep->getNumOperands() - 1 );
+        if ( !index ) {
+            LOG_ERROR << "Failed to get index for GEP" << LOG_END;
+            return;
+        }
+
+        // Determine address space from base pointer
+        auto* base_ptr_type = base->Type()->As< tint::core::type::Pointer >();
+        auto address_space =
+            base_ptr_type ? base_ptr_type->AddressSpace() : tint::core::AddressSpace::kStorage;
+
+        // Determine access mode from base pointer
+        auto access = base_ptr_type ? base_ptr_type->Access() : tint::core::Access::kReadWrite;
+
+        auto* result_elem_type = MapLLVMtype2WGSLtype( m_Module, gep->getResultElementType() );
+
+        auto* access_inst = m_Builder.Access(
+            m_Module.Types().ptr( address_space, result_elem_type, access ), base, index );
+
+        m_ValueMap[&I] = access_inst->Result();
+        LOG_INFO << "      Created array access" << LOG_END;
+    }
+    else {
+        LOG_ERROR << "Multi-index GEP not supported" << LOG_END;
+    }
+}
+
+void Translator::visitSExt( const llvm::Instruction& I )
+{
+    // Sign extension: i32 -> i64 (but WGSL doesn't have i64, so just pass through)
+    auto* operand = getOperand( I, 0 );
+    if ( !operand )
+        return;
+
+    // For now, just map directly (WGSL will use i32 or u32)
+    m_ValueMap[&I] = operand;
+
+    LOG_INFO << "    SExt (pass-through)" << LOG_END;
+}
+
+void Translator::visitStore( const llvm::Instruction& I )
+{
+    auto* value = getOperand( I, 0 ); // Value to store
+    auto* ptr = getOperand( I, 1 );   // Destination pointer
+
+    if ( !value || !ptr ) {
+        LOG_ERROR << "Failed to get Store operands" << LOG_END;
+        return;
+    }
+
+    m_Builder.Store( ptr, value );
+    LOG_INFO << "    Store" << LOG_END;
+}
 
 } // namespace WGSL

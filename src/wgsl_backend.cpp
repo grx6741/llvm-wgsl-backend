@@ -91,6 +91,8 @@ void Backend::RegisterFunction( const llvm::Function& F )
             translator->AddFunctionParam( arg.getName().str(), &arg, arg_type );
     }
 
+    Translator::RegisterWGSLFunction( &F, translator->GetWGSLFunc() );
+
     m_Translators.push_back( std::move( translator ) );
 }
 
@@ -100,26 +102,6 @@ void Backend::initializeMainFunction()
 {
     m_MainFunction = m_Builder.ComputeFunction(
         "wgsl_main", tint::core::i32( 1 ), tint::core::i32( 1 ), tint::core::i32( 1 ) );
-
-    // const std::unordered_map< std::string_view, tint::core::BuiltinValue > params = {
-    //     { "global_id", tint::core::BuiltinValue::kGlobalInvocationId },
-    //     { "local_id", tint::core::BuiltinValue::kLocalInvocationId },
-    //     { "workgroup_id", tint::core::BuiltinValue::kWorkgroupId },
-    //     { "num_workgroups", tint::core::BuiltinValue::kNumWorkgroups },
-    // };
-
-    // std::vector< tint::core::ir::FunctionParam* > param_ids;
-
-    // param_ids.reserve( params.size() );
-
-    // for ( const auto& [param_name, param_enum] : params ) {
-    //     auto* param_id =
-    //         m_Builder.FunctionParam( param_name, m_Module.Types().vec3( m_Module.Types().u32() )
-    //         );
-    //     param_id->SetBuiltin( param_enum );
-
-    //     m_MainFunction->SetParams( { param_id } );
-    // }
 
     m_Builder.Append( m_MainFunction->Block(), [&] {
         auto* local_id_param =
@@ -167,7 +149,7 @@ void Backend::initializeMainFunction()
 
         auto* workgroup_size = m_Builder.Access( m_Module.Types().vec3( m_Module.Types().u32() ),
                                                  m_Globals->GetIntrinsicsStruct(),
-                                                 m_Builder.Constant( tint::core::u32( 3 ) ) );
+                                                 m_Builder.Constant( tint::core::u32( 4 ) ) );
 
         auto* workgroup_size_const =
             m_Builder.Composite( m_Module.Types().vec3( m_Module.Types().u32() ),

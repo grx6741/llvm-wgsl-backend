@@ -70,7 +70,7 @@ tint::core::ir::Function* Globals::createAccessor( tint::core::ir::Module& M,
                                                    int component_index )
 {
     // Create function: fn llvm_nvvm_read_ptx_sreg_ctaid_x() -> u32
-    auto* func = B.Function( name, M.Types().u32() );
+    auto* func = B.Function( name, M.Types().i32() );
 
     // Build function body
     B.Append( func->Block(), [&] {
@@ -90,12 +90,24 @@ tint::core::ir::Function* Globals::createAccessor( tint::core::ir::Module& M,
         auto* global_id_vec = B.Load( global_id_access );
 
         // Extract the component (x=0, y=1, z=2)
-        auto* component = B.Access( M.Types().u32(),
-                                    global_id_vec->Result(),
-                                    B.Constant( tint::core::u32( component_index ) ) );
+        // auto* component = B.Access( M.Types().u32(),
+        //                             global_id_vec->Result(),
+        //                             B.Constant( tint::core::u32( component_index ) ) );
+
+        auto* component_ptr = B.Access( M.Types().ptr( tint::core::AddressSpace::kPrivate,
+                                                       M.Types().u32(),
+                                                       tint::core::Access::kReadWrite ),
+                                        m_Intrinsics->Result(),
+                                        B.Constant( tint::core::u32( 0 ) ),
+                                        B.Constant( tint::core::u32( component_index ) ) );
+
+        auto* loaded = B.Load( component_ptr );
+
+        // Bitcast u32 -> i32
+        auto* casted = B.Bitcast( M.Types().i32(), loaded->Result() );
 
         // Return the component
-        B.Return( func, component->Result() );
+        B.Return( func, casted->Result() );
     } );
 
     return func;

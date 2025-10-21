@@ -13,30 +13,25 @@ test_device_src = $(test_dir)/$(test_name)/$(test_name).cu
 test_device_bin = $(test_dir)/$(test_name)/$(test_name)_device.ll
 test_host_src = $(test_dir)/$(test_name)/main.cu
 test_host_bin = $(test_dir)/$(test_name)/$(test_name)_host.ll
+test_cxx_flags = -Os -S -emit-llvm -fno-discard-value-names -Wno-unknown-cuda-version
 
 # Compile CUDA device code to NVPTX IR
 $(test_device_bin): $(test_device_src)
 	clang++ --cuda-gpu-arch=sm_70 \
 		--cuda-device-only \
-		-O3 \
+		$(test_cxx_flags) \
 		-nocudalib \
-		-S -emit-llvm \
-		-fno-discard-value-names \
 		$(test_device_src) \
-		-o $(test_device_bin) \
-		-Wno-unknown-cuda-version
+		-o $(test_device_bin)
 
 # Compile CUDA host code to LLVM IR
 $(test_host_bin): $(test_host_src)
 	clang++ --cuda-gpu-arch=sm_70 \
 		--cuda-host-only \
-		-O3 \
-		-S -emit-llvm \
+		$(test_cxx_flags) \
 		$(test_host_src) \
 		-o $(test_host_bin) \
-		-I/usr/local/cuda/include \
-		-fno-discard-value-names \
-		-Wno-unknown-cuda-version
+		-I/usr/local/cuda/include
 
 # Run the test
 test: $(test_device_bin) $(dll)

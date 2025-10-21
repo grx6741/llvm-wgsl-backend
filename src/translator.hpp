@@ -1,4 +1,5 @@
 #pragma once
+#include <llvm/IR/Instructions.h>
 
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Argument.h"
@@ -47,6 +48,11 @@ public:
         return m_WGSLfunc;
     }
 
+    static void RegisterWGSLFunction( const llvm::Function* llvm_func,
+                                      tint::core::ir::Function* wgsl_func );
+
+    static tint::core::ir::Function* GetWGSLFunction( const llvm::Function* llvm_func );
+
 private:
     const std::string getDemangledName( const std::string& mangled_name );
 
@@ -59,6 +65,18 @@ private:
     void translateNormalFunction();
     void translateFunctionBody();
 
+    void handleBranch( const llvm::BranchInst* br );
+    bool isJustBranchTo( const llvm::BasicBlock* BB, const llvm::BasicBlock* target );
+    const llvm::BasicBlock* findMergeBlock( const llvm::BasicBlock* true_block,
+                                            const llvm::BasicBlock* false_block );
+
+    void translateBasicBlock( const llvm::BasicBlock* BB, std::function< void() > append_to );
+
+    bool isIfPattern( const llvm::BasicBlock* BB,
+                      const llvm::BasicBlock*& true_block,
+                      const llvm::BasicBlock*& false_block,
+                      const llvm::BasicBlock*& merge_block );
+
     // Intruction Visitors
     void visitFAdd( const llvm::Instruction& I );
     void visitFMul( const llvm::Instruction& I );
@@ -68,9 +86,19 @@ private:
     void visitCall( const llvm::Instruction& I );
     void visitICmp( const llvm::Instruction& I );
     void visitBr( const llvm::Instruction& I );
+    void visitLoad( const llvm::Instruction& I );
+    void visitGetElementPtr( const llvm::Instruction& I );
+    void visitSExt( const llvm::Instruction& I );
+    void visitStore( const llvm::Instruction& I );
 
 private:
     std::unordered_map< const llvm::Value*, tint::core::ir::Value* > m_ValueMap;
+    std::unordered_set< const llvm::BasicBlock* > m_TranslatedBlocks;
+    std::unordered_map< const llvm::BasicBlock*, tint::core::ir::Block* > m_BlockMap;
+    std::unordered_map< const llvm::Value*, uint32_t > m_ParamToIndex;
+    tint::core::ir::Var* m_UniformVar;
+
+    static std::unordered_map< const llvm::Function*, tint::core::ir::Function* > s_FunctionMap;
 
     const llvm::Function* m_LLVMfunc;
 
