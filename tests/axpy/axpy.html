@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebGPU AXPY Benchmark</title>
+    <style>
+        body {
+            /*font-family: 'Consolas', 'Monaco', monospace;*/
+            max-width: 1200px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+        }
+        h1 {
+            color: #4fc3f7;
+        }
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .panel {
+            background: #252526;
+            border: 1px solid #3c3c3c;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        .full-width {
+            grid-column: 1 / -1;
+        }
+        pre {
+            background: #1e1e1e;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            padding: 15px;
+            overflow-x: auto;
+            margin: 10px 0;
+        }
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #3c3c3c;
+        }
+        .metric:last-child {
+            border-bottom: none;
+        }
+        .metric-label {
+            color: #9cdcfe;
+        }
+        .metric-value {
+            color: #ce9178;
+            font-weight: bold;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .status.loading {
+            background: #1e3a5f;
+            color: #4fc3f7;
+        }
+        .status.success {
+            background: #1e5f3a;
+            color: #4caf50;
+        }
+        .status.error {
+            background: #5f1e1e;
+            color: #f44336;
+        }
+        button {
+            background: #0e639c;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+        }
+        button:hover {
+            background: #1177bb;
+        }
+        button:disabled {
+            background: #3c3c3c;
+            cursor: not-allowed;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        input[type="number"] {
+            background: #3c3c3c;
+            border: 1px solid #555;
+            color: #d4d4d4;
+            padding: 8px;
+            border-radius: 4px;
+            width: 120px;
+        }
+        label {
+            color: #9cdcfe;
+        }
+    </style>
+</head>
+<body>
+    <script src="axpy.js"></script>
+    <h1>WebGPU AXPY Kernel Benchmark</h1>
+    
+    <div class="container">
+        <div class="panel full-width">
+            <h2>Controls</h2>
+            <div class="controls">
+                <label>Array Size (n):</label>
+                <input type="number" id="arraySize" value="10000000" min="1000" step="1000">
+                
+                <label>Scalar (a):</label>
+                <input type="number" id="scalarValue" value="2.5" step="0.1">
+                
+                <button id="runBtn" onclick="runBenchmark()">Run Benchmark</button>
+                <button id="runMultipleBtn" onclick="runMultipleBenchmarks()">Run 50x Average</button>
+            </div>
+            <div id="status" class="status loading" style="display: none;"></div>
+        </div>
+        
+        <div class="panel">
+            <h2>Performance Metrics</h2>
+            <div id="metrics"></div>
+        </div>
+        
+        <div class="panel">
+            <h2>Throughput</h2>
+            <div id="throughput"></div>
+        </div>
+        
+        <div class="panel full-width">
+            <h2>Validation</h2>
+            <pre id="validation"></pre>
+        </div>
+        
+        <div class="panel full-width">
+            <h2>Shader Info</h2>
+            <pre id="shaderInfo"></pre>
+        </div>
+    </div>
+</body>
+</html>

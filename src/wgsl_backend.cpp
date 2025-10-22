@@ -101,7 +101,7 @@ void Backend::RegisterFunction( const llvm::Function& F )
 void Backend::initializeMainFunction()
 {
     m_MainFunction = m_Builder.ComputeFunction(
-        "wgsl_main", tint::core::i32( 1 ), tint::core::i32( 1 ), tint::core::i32( 1 ) );
+        "wgsl_main", tint::core::i32( 256 ), tint::core::i32( 1 ), tint::core::i32( 1 ) );
 
     m_Builder.Append( m_MainFunction->Block(), [&] {
         auto* local_id_param =

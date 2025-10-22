@@ -11,6 +11,7 @@ test_name = axpy
 test_dir = tests
 test_device_src = $(test_dir)/$(test_name)/$(test_name).cu
 test_device_bin = $(test_dir)/$(test_name)/$(test_name)_device.ll
+test_device_output = $(test_dir)/$(test_name)/$(test_name)_output.wgsl
 test_host_src = $(test_dir)/$(test_name)/main.cu
 test_host_bin = $(test_dir)/$(test_name)/$(test_name)_host.ll
 test_cxx_flags = -Os -S -emit-llvm -fno-discard-value-names -Wno-unknown-cuda-version
@@ -38,7 +39,7 @@ test: $(test_device_bin) $(dll)
 	opt-19 -load-pass-plugin $(dll) \
 		-passes=llvm2wgsl \
 		-disable-output \
-		$(test_device_bin)
+		$(test_device_bin) > $(test_device_output)
 
 # Clean up generated files
 clean:

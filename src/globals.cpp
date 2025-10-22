@@ -25,88 +25,69 @@ void Globals::createIntrinsicAccessors( tint::core::ir::Module& M,
                                         tint::core::ir::Builder& B,
                                         tint::SymbolTable& S )
 {
-    // --- blockIdx.* (ctaid) ---
-    m_IntrinsicAccessors["llvm.nvvm.read.ptx.sreg.ctaid.x"] =
-        createAccessor( M, B, "get_workgroup_id_x", 1, 0 );
-    m_IntrinsicAccessors["llvm.nvvm.read.ptx.sreg.ctaid.y"] =
-        createAccessor( M, B, "get_workgroup_id_y", 1, 1 );
-    m_IntrinsicAccessors["llvm.nvvm.read.ptx.sreg.ctaid.z"] =
-        createAccessor( M, B, "get_workgroup_id_z", 1, 2 );
+    // Member indices in globals_t:
+    // 0: local_id
+    // 1: workgroup_id
+    // 2: num_workgroups
+    // 3: global_id
+    // 4: workgroup_size
 
-    // --- threadIdx.* (tid) ---
+    // workgroup_id (blockIdx)
+    m_IntrinsicAccessors["llvm.nvvm.read.ptx.sreg.ctaid.x"] =
+        createAccessor( M, B, "get_workgroup_id_x", 1, 0 ); // member 1, component x
+    m_IntrinsicAccessors["llvm.nvvm.read.ptx.sreg.ctaid.y"] =
+        createAccessor( M, B, "get_workgroup_id_y", 1, 1 ); // member 1, component y
+    m_IntrinsicAccessors["llvm.nvvm.read.ptx.sreg.ctaid.z"] =
+        createAccessor( M, B, "get_workgroup_id_z", 1, 2 ); // member 1, component z
+
+    // local_id (threadIdx)
     m_IntrinsicAccessors["llvm.nvvm.read.ptx.sreg.tid.x"] =
-        createAccessor( M, B, "get_local_id_x", 0, 0 );
+        createAccessor( M, B, "get_local_id_x", 0, 0 ); // member 0, component x
     m_IntrinsicAccessors["llvm.nvvm.read.ptx.sreg.tid.y"] =
         createAccessor( M, B, "get_local_id_y", 0, 1 );
     m_IntrinsicAccessors["llvm.nvvm.read.ptx.sreg.tid.z"] =
         createAccessor( M, B, "get_local_id_z", 0, 2 );
 
-    // --- gridDim.* (nctaid) ---
+    // num_workgroups (gridDim)
     m_IntrinsicAccessors["llvm.nvvm.read.ptx.sreg.nctaid.x"] =
-        createAccessor( M, B, "get_num_workgroups_x", 2, 0 );
+        createAccessor( M, B, "get_num_workgroups_x", 2, 0 ); // member 2
     m_IntrinsicAccessors["llvm.nvvm.read.ptx.sreg.nctaid.y"] =
         createAccessor( M, B, "get_num_workgroups_y", 2, 1 );
     m_IntrinsicAccessors["llvm.nvvm.read.ptx.sreg.nctaid.z"] =
         createAccessor( M, B, "get_num_workgroups_z", 2, 2 );
 
-    // --- global_id.* (synthetic CUDA global thread id) ---
-    m_IntrinsicAccessors["cuda.global.id.x"] = createAccessor( M, B, "get_global_id_x", 3, 0 );
-    m_IntrinsicAccessors["cuda.global.id.y"] = createAccessor( M, B, "get_global_id_y", 3, 1 );
-    m_IntrinsicAccessors["cuda.global.id.z"] = createAccessor( M, B, "get_global_id_z", 3, 2 );
-
-    // --- gridDim.* (nctaid) ---
+    // workgroup_size (blockDim)
     m_IntrinsicAccessors["llvm.nvvm.read.ptx.sreg.ntid.x"] =
-        createAccessor( M, B, "get_workgroup_size_x", 4, 0 );
+        createAccessor( M, B, "get_workgroup_size_x", 4, 0 ); // member 4
     m_IntrinsicAccessors["llvm.nvvm.read.ptx.sreg.ntid.y"] =
         createAccessor( M, B, "get_workgroups_size_y", 4, 1 );
     m_IntrinsicAccessors["llvm.nvvm.read.ptx.sreg.ntid.z"] =
         createAccessor( M, B, "get_workgroups_size_z", 4, 2 );
 }
 
-tint::core::ir::Function* Globals::createAccessor( tint::core::ir::Module& M,
-                                                   tint::core::ir::Builder& B,
-                                                   const std::string& name,
-                                                   int intrinsic_index,
-                                                   int component_index )
+tint::core::ir::Function*
+Globals::createAccessor( tint::core::ir::Module& M,
+                         tint::core::ir::Builder& B,
+                         const std::string& name,
+                         int member_index,     // ✅ Which struct member (0-4)
+                         int component_index ) // ✅ Which component (0=x, 1=y, 2=z)
 {
-    // Create function: fn llvm_nvvm_read_ptx_sreg_ctaid_x() -> u32
     auto* func = B.Function( name, M.Types().i32() );
 
-    // Build function body
     B.Append( func->Block(), [&] {
-        // Access globals.global_id_
-        auto* globals_ptr_type = M.Types().ptr( tint::core::AddressSpace::kPrivate,
-                                                M.Types().vec3( M.Types().u32() ),
-                                                tint::core::Access::kReadWrite );
-
-        // Access the global_id_ member (index 0 in the struct)
-        auto* global_id_access =
-            B.Access( globals_ptr_type,
+        // Access the correct struct member AND component in one chain
+        auto* component_ptr =
+            B.Access( M.Types().ptr( tint::core::AddressSpace::kPrivate,
+                                     M.Types().u32(),
+                                     tint::core::Access::kReadWrite ),
                       m_Intrinsics->Result(),
-                      B.Constant( tint::core::u32( intrinsic_index ) ) // Index of global_id_ member
+                      B.Constant( tint::core::u32( member_index ) ),   // Struct member
+                      B.Constant( tint::core::u32( component_index ) ) // Vector component
             );
 
-        // Load the vec3<u32>
-        auto* global_id_vec = B.Load( global_id_access );
-
-        // Extract the component (x=0, y=1, z=2)
-        // auto* component = B.Access( M.Types().u32(),
-        //                             global_id_vec->Result(),
-        //                             B.Constant( tint::core::u32( component_index ) ) );
-
-        auto* component_ptr = B.Access( M.Types().ptr( tint::core::AddressSpace::kPrivate,
-                                                       M.Types().u32(),
-                                                       tint::core::Access::kReadWrite ),
-                                        m_Intrinsics->Result(),
-                                        B.Constant( tint::core::u32( 0 ) ),
-                                        B.Constant( tint::core::u32( component_index ) ) );
-
         auto* loaded = B.Load( component_ptr );
+        auto* casted = B.Convert( M.Types().i32(), loaded->Result() );
 
-        // Bitcast u32 -> i32
-        auto* casted = B.Bitcast( M.Types().i32(), loaded->Result() );
-
-        // Return the component
         B.Return( func, casted->Result() );
     } );
 
