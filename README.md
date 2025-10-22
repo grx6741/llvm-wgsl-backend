@@ -138,6 +138,23 @@ fn wgsl_main(@builtin(local_invocation_id) local_id : vec3<u32>, @builtin(workgr
 }
 ```
 
+Ran on RTX 3050, 6GB VRAM
+
+| Metric                                | CUDA                | WGSL                      | Notes                                                                 |
+| ------------------------------------- | ------------------- | ------------------------- | --------------------------------------------------------------------- |
+| **Host → Device Transfer**            | 13.80 ms            | 8.14 ms (Buffer Creation) | WGSL time is just buffer creation; actual host → GPU copy may overlap |
+| **Kernel / GPU Execution**            | 1.13 ms             | 32.78 ms                  | WGSL shader execution is ~30× slower than CUDA kernel                 |
+| **Device → Host Transfer / Readback** | 6.62 ms             | 8.09 ms                   | Comparable, slightly slower for WGSL                                  |
+| **Total Time**                        | 21.56 ms            | 49.09 ms                  | WGSL ~2.3× slower overall                                             |
+| **Array Size**                        | 10,000,000 elements | 10,000,000 elements       | Same                                                                  |
+| **Data Size**                         | 114.44 MB           | 114.44 MB                 | Same                                                                  |
+| **Block / Workgroup Size**            | 256 threads/block   | 256 threads/workgroup     | Same logical partitioning                                             |
+| **Number of Blocks / Workgroups**     | 39,063              | 39,063                    | Same                                                                  |
+| **Total Threads**                     | 10,000,128          | 10,000,000                | Slight rounding difference                                            |
+| **Bandwidth**                         | 98.50 GB/s          | 3.49 GB/s                 | WGSL bandwidth much lower                                             |
+| **Performance**                       | 17.63 GFLOPS        | 0.61 GFLOPS               | WGSL performance ~30× lower                                           |
+| **Total Time**                        | 22.18 ms            | 49.09 ms                  | WGSL performance ~2× lower                                           |
+
 # NOTES
 
 - ![NVPTX](https://llvm.org/docs/NVPTXUsage.html)
