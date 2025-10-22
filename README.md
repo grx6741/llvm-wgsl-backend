@@ -2,7 +2,7 @@
 
 **Author:** Gowrish
 **Project Type:** Honors Project, Indian Institute of Information Technology, Kottayam
-**Development Period:** October 2023 - On going
+**Development Period:** August 2025 - On going
 **Status:** Active Development
 
 # About
