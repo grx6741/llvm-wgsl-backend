@@ -66,7 +66,7 @@ Timings run_axpy_cuda( int n, float a, const float* h_x, float* h_y, float* h_re
     int numBlocks = ( n + blockSize - 1 ) / blockSize;
 
     CUDA_CHECK( cudaEventRecord( start ) );
-    axpy_kernel< < < numBlocks, blockSize > > >( n, a, d_x, d_y );
+    axpy_kernel<<< numBlocks, blockSize >>>( n, a, d_x, d_y );
     CUDA_CHECK( cudaEventRecord( stop ) );
     CUDA_CHECK( cudaEventSynchronize( stop ) );
     CUDA_CHECK( cudaGetLastError() );
@@ -201,8 +201,8 @@ void print_device_info()
     printf( "Shared Memory per Block:  %zu bytes\n", prop.sharedMemPerBlock );
     printf( "Max Threads per Block:    %d\n", prop.maxThreadsPerBlock );
     printf( "Multiprocessors:          %d\n", prop.multiProcessorCount );
-    printf( "Clock Rate:               %.2f GHz\n", prop.clockRate / 1e6f );
-    printf( "Memory Clock Rate:        %.2f GHz\n", prop.memoryClockRate / 1e6f );
+    // printf( "Clock Rate:               %.2f GHz\n", prop.clockRate / 1e6f );
+    // printf( "Memory Clock Rate:        %.2f GHz\n", prop.memoryClockRate / 1e6f );
     printf( "Memory Bus Width:         %d-bit\n", prop.memoryBusWidth );
     printf( "===========================================\n" );
 }
@@ -262,7 +262,7 @@ int main( int argc, char** argv )
     // Parse command line arguments
     int n = 10000000; // Default: 10M elements
     float a = 2.5f;
-    int num_runs = 1;
+    int num_runs = 50;
 
     if ( argc > 1 ) {
         n = atoi( argv[1] );
