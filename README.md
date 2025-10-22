@@ -1,6 +1,13 @@
-# Intro
+# LLVM To WGSL Backend
 
-blah blah blah
+**Author:** Gowrish
+**Project Type:** Honors Project, Indian Institute of Information Technology, Kottayam
+**Development Period:** October 2023 - On going
+**Status:** Active Development
+
+# About
+
+This is a LLVM Backend that translates CUDA Kernels to WGSL compute shader
 
 > [!WARNING]
 > Only Tested on WSL/Ubuntu 20.04 and Debian 10 Bookworm and llvm 19
