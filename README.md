@@ -1,8 +1,11 @@
 # LLVM To WGSL Backend
 
 **Author:** Gowrish
+
 **Project Type:** Honors Project, Indian Institute of Information Technology, Kottayam
+
 **Development Period:** August 2025 - On going
+
 **Status:** Active Development
 
 # About
